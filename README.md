@@ -1,11 +1,29 @@
 # A314Mount
 
 Mount and unmount **ADF** (floppy) and **HDF** (hard-disk) images in the
-**A314**'s emulated drives (`PD0:`–`PD3:`) from the Amiga side — no more
-`nc`-ing into the Pi to swap disks. Ships as a CLI (`A314Mount`) and a GadTools
-GUI (`A314MountGUI`).
+**A314**'s emulated drives (`PD0:`–`PD3:`) **from the Amiga**.
 
-Built with amiga-gcc (`m68k-amigaos-gcc`) under WSL — pure NDK, no MUI/ReAction.
+Swapping a virtual disk on the [A314](https://github.com/niklasekstrom/a314)
+normally means getting to the Raspberry Pi and hand-typing at its disk daemon:
+
+```
+echo insert 0 -rw /home/pi/Workbench.adf | nc localhost 23890
+```
+
+A314Mount does it from the Amiga instead — from a Shell, or from Workbench with
+a file browser that lists the Pi's own directories:
+
+```
+A314Mount INSERT DRIVE 1 /home/pi/games.adf RW
+A314Mount EJECT  DRIVE 1
+```
+
+It **modifies nothing on the Pi** — no patched daemon, no extra service. It
+talks to the stock a314 disk daemon over `bsdsocket.library`, and the GUI's
+browser lists Pi directories by running the stock `pi` command.
+
+Ships as a CLI (`A314Mount`) and a GadTools GUI (`A314MountGUI`), built with
+amiga-gcc — pure NDK, no MUI/ReAction. Verified on a real A1200 (OS 3.2).
 
 ## How it works
 
@@ -166,8 +184,10 @@ scrolling list (subdirectories first with a trailing `/`, then `.adf`/`.hdf`/
 `.adz` files). Select an entry and **Open** to descend into a directory or pick a
 file; **Parent** goes up. Picking a file drops its **absolute Pi path** straight
 into the Image field — it can reach **anywhere on the Pi** you can read, not just
-the a314 share. It starts at `A314_BROWSE_ROOT` (`/home/laine`, a `#define` in
-`src/gui.c`).
+the a314 share. It starts at **`A314_BROWSE_ROOT`** — a `#define` at the top of
+`src/gui.c`; **change it to wherever you keep your images** (it ships pointing
+at the author's `/home/laine`) and rebuild. Wherever it starts, **Parent**
+walks up, so nothing is out of reach.
 
 > **Fully standalone — no a314 software is modified.** The browser lists Pi
 > directories by running the stock **`pi`** command (`C:pi ls -1Ap <dir>`, the
@@ -199,8 +219,9 @@ regenerated with `tools/makeicon_a314mount.py` (needs `tools/iconlib.py`):
   auto-retries the `-rw`-first form if a daemon ever rejects it.
 * **`127.0.0.1` is the Pi** — a314bsd runs socket ops Pi-side, so localhost is
   correct and no LAN IP is needed.
-* The daemon has **no `list` command**, so the GUI can't offer a pickable ADF
-  menu — you type the Pi-side path.
+* The disk daemon has **no directory-listing command**, which is why the GUI's
+  browser shells out to the stock `pi` command instead of asking the daemon —
+  and why A314Mount needs no changes to any a314 software.
 * A314Mount prints `PDn: inserted/ejected` but usually *not* the daemon's reply
   text: a314bsd doesn't honour `SO_RCVTIMEO`, so the engine (by design, to never
   hang) skips the blocking read. The operation still succeeds.
