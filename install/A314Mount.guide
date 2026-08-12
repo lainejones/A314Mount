@@ -1,0 +1,175 @@
+@database A314Mount.guide
+@$VER: A314Mount.guide 1.0 (07.06.2026)
+@author Laine Jones
+@wordwrap
+
+@node Main "A314Mount 0.1"
+
+  @{b}A314Mount@{ub} - mount ADF and HDF images on the A314 disk drives
+
+  Insert and eject ADF (floppy) and HDF (hard-disk) images in the A314's
+  emulated drives PD0: to PD3:, straight from the Amiga - no more telnetting
+  into the Pi to swap disks.
+
+    @{" Introduction   " link Intro}
+    @{" Requirements   " link Reqs}
+    @{" Installation   " link Install}
+    @{" CLI usage      " link CLI}
+    @{" GUI usage      " link GUI}
+    @{" ADF vs HDF     " link HDF}
+    @{" Troubleshooting" link Trouble}
+
+  Ships as a Shell command (A314Mount) and a GadTools GUI (A314MountGUI).
+
+@endnode
+
+@node Intro "Introduction"
+
+  @{b}How it works@{ub}
+
+  The a314 disk service on the Pi runs a small line-based TCP server (by
+  default localhost:23890) that understands, one line each:
+
+      insert <drive> <pi-path>       mount an image read-only
+      insert <drive> -rw <pi-path>   mount writable
+      eject  <drive>                 unmount
+
+  <drive> is 0 to 3 (PD0: to PD3:). A314Mount reaches the server over
+  @{b}bsdsocket.library@{ub} (provided by a314bsd), so the socket calls run on
+  the Pi and 127.0.0.1 is the Pi. It opens a socket, sends one line, and
+  reports the result.
+
+  It is a front end for Niklas Ekstrom's a314 disk service; see the
+  Software/disk directory of the a314 project.
+
+@endnode
+
+@node Reqs "Requirements"
+
+  @{b}You need:@{ub}
+
+  * A working bsdsocket.library - @{b}a314bsd@{ub} - so 127.0.0.1 routes to
+    the Pi.
+
+  * The a314 @{b}disk driver@{ub} installed: a314disk.device in DEVS: and the
+    PD0: to PD3: drives mounted. See @{" Installation " link Install}.
+
+  The daemon on :23890 is an @{b}on-demand@{ub} service - it only starts (and
+  starts listening) once the Amiga opens a drive, so the drive must exist and
+  have been accessed at least once. If nothing has touched a drive yet,
+  A314Mount reports "Cannot reach the disk daemon".
+
+@endnode
+
+@node Install "Installation"
+
+  Copy the A314Mount drawer onto the Amiga. Then either:
+
+  * @{b}Double-click the Install icon@{ub} - it runs the install script via
+    IconX and copies everything to SYS:Utilities and C:, or
+
+  * From a Shell in the drawer:
+
+        Execute Install               ; GUI to SYS:Utilities, CLI to C:
+        Execute Install SYS:Tools     ; ...or name your own drawer
+
+  The installer places @{b}A314MountGUI@{ub} + its icon in the chosen drawer
+  (double-click to launch), copies the @{b}A314Mount@{ub} CLI to C:, and - if
+  DEVS:a314disk.device is present - installs the PD0: to PD3: drive
+  descriptors to DEVS:DOSDrivers/. After that, "Mount PD0:" (or a reboot)
+  brings a drive up; the first access to it starts the Pi daemon.
+
+@endnode
+
+@node CLI "CLI usage"
+
+      A314Mount INSERT [DRIVE n] <image> [RW] [HOST h] [PORT p] [SHOW]
+      A314Mount EJECT  [DRIVE n]         [HOST h] [PORT p] [SHOW]
+
+  @{b}INSERT / EJECT@{ub}  pick one.
+  @{b}DRIVE@{ub}   virtual unit, 0 = PD0: (default) .. 3 = PD3:.
+  @{b}<image>@{ub} Pi-side path of the ADF or HDF (e.g. /home/pi/wb.adf).
+  @{b}RW@{ub}      mount writable (default read-only; usually wanted for HDF).
+  @{b}HOST/PORT@{ub} daemon target (default 127.0.0.1 : 23890). HOST is a
+            numeric IP.
+  @{b}SHOW@{ub}    print the line that would be sent, don't send it (dry run).
+
+  @{b}Examples@{ub}
+
+      A314Mount INSERT /home/pi/Workbench.adf         ; PD0:, read-only
+      A314Mount INSERT DRIVE 1 /home/pi/games.adf RW  ; PD1:, writable
+      A314Mount INSERT DRIVE 2 /home/pi/work.hdf RW   ; an HDF on PD2:
+      A314Mount EJECT                                 ; eject PD0:
+      A314Mount EJECT DRIVE 1
+
+@endnode
+
+@node GUI "GUI usage"
+
+  @{b}Double-click A314MountGUI@{ub} from Workbench, or run it from a Shell.
+
+  Pick the @{b}Drive@{ub} (PD0: to PD3:), set the @{b}Image@{ub}, tick
+  @{b}Read-write@{ub} if needed, and click @{b}Insert@{ub} or @{b}Eject@{ub}.
+  @{b}Host@{ub} / @{b}Port@{ub} default to 127.0.0.1 / 23890. The status line
+  shows the result, e.g. "PD0: inserted".
+
+  Set the Image two ways: type the Pi-side path, or click the @{b}folder
+  button@{ub} at the end of the Image row (clicking Insert with an empty field
+  opens it too). That opens a built-in @{b}Pi directory browser@{ub} and shows
+  the directory in a scrolling list (subdirectories first with a trailing "/",
+  then .adf/.hdf/.adz files). Select an entry and @{b}Open@{ub} to descend into
+  a directory or pick a file; @{b}Parent@{ub} goes up. Picking a file drops its
+  absolute Pi path into the Image field - it can reach anywhere on the Pi you
+  can read, not just the a314 share.
+
+  It is fully standalone: it lists directories by running the stock @{b}pi@{ub}
+  command (the a314 picmd service), so nothing on the Pi needs modifying.
+
+@endnode
+
+@node HDF "ADF vs HDF"
+
+  Both ADF and HDF images go into the same PD0: to PD3: drives with the same
+  INSERT / EJECT. The only difference is the @{b}mount-list geometry@{ub} the
+  drive was created with:
+
+  * @{b}ADF@{ub} - every floppy is 901120 bytes, so the stock PD0: to PD3:
+    descriptors (floppy geometry) work for any ADF. Nothing extra to do.
+
+  * @{b}HDF@{ub} - geometry is per-image (Surfaces=1, BlocksPerTrack=32,
+    HighCyl = size/16384 - 1), and the Amiga mount entry @{b}must match the
+    image@{ub} or the filesystem reads the wrong blocks. Generate a correct
+    entry with the bundled helper (pure Python, runs on the Pi or the host):
+
+        python3 mkhdfmount.py /home/pi/work.hdf 2 WORK  > WORK
+
+    Copy the result to DEVS:DOSDrivers/WORK, "Mount WORK:", then
+    "A314Mount INSERT DRIVE 2 /home/pi/work.hdf RW". Use a drive unit not
+    already claimed by a floppy - a unit's geometry locks to the first image
+    inserted after each reboot. HDFs are almost always mounted RW. For an
+    FFS-formatted HDF, add the FileSystem/DosType lines the helper notes.
+
+@endnode
+
+@node Trouble "Troubleshooting"
+
+  @{b}"Cannot reach the disk daemon (not listening?)"@{ub}
+    The drive isn't up yet. Mount it (e.g. "Mount PD0:") and access it once
+    (e.g. "dir PD0:") so a314disk.device connects and the Pi daemon starts.
+
+  @{b}"No bsdsocket.library ..."@{ub}
+    a314bsd (or a TCP stack) isn't running. Start it first.
+
+  @{b}"Host must be a numeric IP"@{ub}
+    Give HOST a dotted-quad address; names aren't resolved. The default
+    127.0.0.1 is correct for a314bsd (socket ops run on the Pi).
+
+  @{b}No "daemon:" reply line@{ub}
+    Normal. a314bsd doesn't honour SO_RCVTIMEO, so A314Mount skips the reply
+    read rather than risk hanging. The insert/eject still succeeds.
+
+  @{b}HDF mounts but shows garbage / won't validate@{ub}
+    The mount-list geometry doesn't match the image. Regenerate the entry
+    with mkhdfmount.py; see @{" ADF vs HDF " link HDF}.
+
+@endnode

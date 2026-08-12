@@ -1,0 +1,52 @@
+.KEY dest
+.BRA {
+.KET }
+;
+; Install  --  installer for A314Mount  (AmigaOS 3.x)
+;
+; Run it FROM the A314Mount drawer, in a Shell:
+;
+;     Execute Install                 ; installs GUI to SYS:Utilities
+;     Execute Install SYS:Tools       ; ...or to a drawer you name
+;
+; It copies the GadTools GUI + its icon to a drawer (so you can double-click
+; it from Workbench), the CLI to C: (so you can type 'A314Mount' in a Shell),
+; and -- if the a314 floppy driver is present -- installs the PD0:/PD1: drive
+; descriptors that A314Mount drives.
+;
+Echo "Installing A314Mount ..."
+;
+; --- GUI + icon -> destination drawer (double-clickable) ---
+If NOT EXISTS "{dest$SYS:Utilities}"
+  MakeDir "{dest$SYS:Utilities}"
+EndIf
+Copy >NIL: A314MountGUI      TO "{dest$SYS:Utilities}/" CLONE
+Copy >NIL: A314MountGUI.info TO "{dest$SYS:Utilities}/" CLONE
+Echo "  GUI -> {dest$SYS:Utilities}/A314MountGUI   (double-click to launch)"
+;
+; --- documentation (AmigaGuide) alongside the GUI ---
+If EXISTS A314Mount.guide
+  Copy >NIL: A314Mount.guide      TO "{dest$SYS:Utilities}/" CLONE
+  Copy >NIL: A314Mount.guide.info TO "{dest$SYS:Utilities}/" CLONE
+  Echo "  Docs -> {dest$SYS:Utilities}/A314Mount.guide   (double-click to read)"
+EndIf
+;
+; --- CLI -> C: (on the Shell path) ---
+Copy >NIL: A314Mount TO C: CLONE
+Echo "  CLI -> C:A314Mount   (try: A314Mount ?)"
+;
+; --- optional: the emulated floppy drives PD0:/PD1: ---
+If EXISTS DEVS:a314disk.device
+  If NOT EXISTS DEVS:DOSDrivers
+    MakeDir DEVS:DOSDrivers
+  EndIf
+  Copy >NIL: PD0 TO DEVS:DOSDrivers/ CLONE
+  Copy >NIL: PD1 TO DEVS:DOSDrivers/ CLONE
+  Copy >NIL: PD2 TO DEVS:DOSDrivers/ CLONE
+  Copy >NIL: PD3 TO DEVS:DOSDrivers/ CLONE
+  Echo "  Drives -> DEVS:DOSDrivers/PD0..PD3   (Mount PD0: now, or reboot)"
+Else
+  Echo "  NOTE: DEVS:a314disk.device not found -- A314Mount needs the a314"
+  Echo "        disk driver installed to get the PD0:/PD1: drives."
+EndIf
+Echo "Done."

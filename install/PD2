@@ -1,0 +1,14 @@
+/* A314 emulated floppy drive PD2:  (a314disk.device unit 2) */
+Device         = a314disk.device
+Unit           = 2
+Flags          = 1
+Surfaces       = 2
+BlocksPerTrack  = 11
+Reserved       = 2
+Interleave     = 0
+LowCyl         = 0
+HighCyl        = 79
+Buffers        = 2
+BufMemType     = 0
+MaxTransfer    = 5632
+#

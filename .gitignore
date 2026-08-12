@@ -1,0 +1,4 @@
+# Build output and test screenshots — regenerable via build.sh / the harness
+out/
+*.o
+__pycache__/
