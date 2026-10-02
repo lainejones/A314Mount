@@ -11,8 +11,15 @@
 ;
 ; It copies the GadTools GUI + its icon to a drawer (so you can double-click
 ; it from Workbench), the CLI to C: (so you can type 'A314Mount' in a Shell),
-; and -- if the a314 floppy driver is present -- installs the PD0:/PD1: drive
+; and -- if the a314 disk driver is present -- installs the PD0:..PD3: drive
 ; descriptors that A314Mount drives.
+;
+; --- needs AmigaOS 3.0+ (exec.library V39) ---
+Version >NIL: exec.library 39
+If WARN
+  Echo "A314Mount needs AmigaOS 3.0 or newer -- nothing installed."
+  Quit 20
+EndIf
 ;
 Echo "Installing A314Mount ..."
 ;
@@ -22,6 +29,7 @@ If NOT EXISTS "{dest$SYS:Utilities}"
 EndIf
 Copy >NIL: A314MountGUI      TO "{dest$SYS:Utilities}/" CLONE
 Copy >NIL: A314MountGUI.info TO "{dest$SYS:Utilities}/" CLONE
+Protect >NIL: "{dest$SYS:Utilities}/A314MountGUI" +e
 Echo "  GUI -> {dest$SYS:Utilities}/A314MountGUI   (double-click to launch)"
 ;
 ; --- documentation (AmigaGuide) alongside the GUI ---
@@ -33,9 +41,10 @@ EndIf
 ;
 ; --- CLI -> C: (on the Shell path) ---
 Copy >NIL: A314Mount TO C: CLONE
+Protect >NIL: C:A314Mount +e
 Echo "  CLI -> C:A314Mount   (try: A314Mount ?)"
 ;
-; --- optional: the emulated floppy drives PD0:/PD1: ---
+; --- optional: the emulated drives PD0:..PD3: ---
 If EXISTS DEVS:a314disk.device
   If NOT EXISTS DEVS:DOSDrivers
     MakeDir DEVS:DOSDrivers
@@ -47,6 +56,6 @@ If EXISTS DEVS:a314disk.device
   Echo "  Drives -> DEVS:DOSDrivers/PD0..PD3   (Mount PD0: now, or reboot)"
 Else
   Echo "  NOTE: DEVS:a314disk.device not found -- A314Mount needs the a314"
-  Echo "        disk driver installed to get the PD0:/PD1: drives."
+  Echo "        disk driver installed to get the PD0:..PD3: drives."
 EndIf
 Echo "Done."

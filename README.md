@@ -89,7 +89,8 @@ a314 setup. On that machine you need:
 
 None of this is patched or custom — it's what a full a314 install already
 provides. **To deploy A314Mount itself:** copy `A314Mount` (CLI) and
-`A314MountGUI` + `A314MountGUI.info`. No Pi-side changes of any kind.
+`A314MountGUI` + `A314MountGUI.info` (see **Install**). No Pi-side changes of
+any kind.
 
 ## Layout
 
@@ -97,6 +98,7 @@ provides. **To deploy A314Mount itself:** copy `A314Mount` (CLI) and
     src/cli.c             command-line front end
     src/gui.c             GadTools GUI front end
     build.sh              build both with amiga-gcc
+    tools/mkpkg.py        stage the release drawer in out/release/
     tools/mock_daemon.py  a safe stand-in daemon for testing
     install/Install       AmigaDOS installer (Execute Install)
     install/Install.info  double-click icon (WBPROJECT, DefaultTool IconX)
@@ -105,6 +107,7 @@ provides. **To deploy A314Mount itself:** copy `A314Mount` (CLI) and
     install/A314Mount.guide       AmigaGuide manual (open with MultiView)
     install/A314Mount.guide.info  document icon (WBPROJECT, DefaultTool MultiView)
     install/A314Mount.info        drawer icon for the whole package (WBDRAWER)
+    install/A314MountGUI.info     the GUI's tool icon (WBTOOL)
 
 ## Documentation
 
@@ -112,15 +115,20 @@ On the Amiga, double-click **`A314Mount.guide`** (its icon opens it via
 `SYS:Utilities/MultiView`) for the full manual — install, CLI, GUI, ADF vs HDF,
 and troubleshooting, all cross-linked. This README mirrors the same material.
 
-The icons are generated with the shared `tools/iconlib.py` machinery:
-`makeicon_a314mount.py` (the floppy GUI icon), `makeicon_install.py` (the green
-install arrow), `makeicon_drawer.py` (the package drawer), and `makeicon_doc.py`
-(the guide's document icon).
+The `.info` icons were generated with the author's own icon tools (not part of
+this repo) and are committed ready-made in `install/`: the floppy GUI icon, the
+green install arrow, the package drawer, and the guide's document icon.
 
 ## Install
 
-Copy the drawer (`A314Mount`, `A314MountGUI`, `A314MountGUI.info`, and the
-`install/` files) onto the Amiga. Then either:
+The release archive unpacks to an `A314Mount` drawer (with `A314Mount.info`
+beside it) holding `A314Mount`, `A314MountGUI` + `A314MountGUI.info`,
+`Install` + `Install.info`, `A314Mount.guide` + `.info`, `PD0`–`PD3`,
+`mkhdfmount.py`, `README.md` and `LICENSE`. Copy the drawer onto the Amiga
+(AmigaOS 3.0+). Use the **`.lha`** — a `.zip` can't carry AmigaDOS protection
+bits, so after unpacking a `.zip` run `protect A314Mount +e` and
+`protect A314MountGUI +e` in the drawer (the installer also sets `+e` on what it
+copies). Then either:
 
 * **Double-click `Install`** from Workbench — its icon (`Install.info`) is a
   WBPROJECT whose *Default Tool* is `IconX`, so Workbench runs the script and
@@ -132,13 +140,18 @@ Copy the drawer (`A314Mount`, `A314MountGUI`, `A314MountGUI.info`, and the
 
 The installer drops **`A314MountGUI` + its icon** into the chosen drawer so you
 can double-click it from Workbench, copies the **`A314Mount`** CLI to `C:`, and
-— if `DEVS:a314disk.device` is present — installs the `PD0:`/`PD1:` drive
-descriptors to `DEVS:DOSDrivers/`. After that, `Mount PD0:` (or a reboot) brings
+— if `DEVS:a314disk.device` is present — installs the `PD0:`–`PD3:` drive
+descriptors to `DEVS:DOSDrivers/`. It stops without installing anything on
+an OS older than 3.0. After that, `Mount PD0:` (or a reboot) brings
 the drive up; the first access to it starts the Pi daemon.
 
 To install by hand instead: copy `A314MountGUI` and `A314MountGUI.info` together
 into any drawer (keep the `.info` next to the executable — that's the icon
 Workbench needs to launch it), and copy `A314Mount` to `C:`.
+
+To rebuild the release drawer from source: `sh build.sh` (in WSL), then
+`python3 tools/mkpkg.py` — it stages `out/release/A314Mount/` and
+`out/release/A314Mount.info`.
 
 ## Build
 
@@ -154,8 +167,8 @@ at startup.
     A314Mount EJECT  [DRIVE n]        [HOST h] [PORT p] [SHOW]
 
 * `INSERT` / `EJECT` — pick one.
-* `DRIVE` — `0` = `PD0:` (default), `1` = `PD1:`.
-* `<adf>` — **Pi-side** path of the ADF (e.g. `/home/pi/Workbench.adf`).
+* `DRIVE` — `0` = `PD0:` (default) … `3` = `PD3:`.
+* `<adf>` — **Pi-side** path of the ADF or HDF (e.g. `/home/pi/Workbench.adf`).
 * `RW` — mount writable (default is read-only).
 * `HOST` / `PORT` — daemon target (default `127.0.0.1` / `23890`). HOST must be
   a numeric IP.
@@ -185,8 +198,8 @@ scrolling list (subdirectories first with a trailing `/`, then `.adf`/`.hdf`/
 file; **Parent** goes up. Picking a file drops its **absolute Pi path** straight
 into the Image field — it can reach **anywhere on the Pi** you can read, not just
 the a314 share. It starts at **`A314_BROWSE_ROOT`** — a `#define` at the top of
-`src/gui.c`; **change it to wherever you keep your images** (it ships pointing
-at the author's `/home/laine`) and rebuild. Wherever it starts, **Parent**
+`src/gui.c`; **change it to wherever you keep your images** (it ships as
+`/home`) and rebuild. Wherever it starts, **Parent**
 walks up, so nothing is out of reach.
 
 > **Fully standalone — no a314 software is modified.** The browser lists Pi
@@ -197,10 +210,7 @@ walks up, so nothing is out of reach.
 > stays hidden). No disk-daemon patch is required for anything.
 
 The icon is a dual-format `.info` (classic 4-colour planar + OS 3.5 colour),
-regenerated with `tools/makeicon_a314mount.py` (needs `tools/iconlib.py`):
-
-    python3 makeicon_a314mount.py --png preview.png     ; preview the art
-    python3 makeicon_a314mount.py A314MountGUI.info      ; write the icon
+committed as `install/A314MountGUI.info`.
 
 ## Testing
 

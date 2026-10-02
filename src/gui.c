@@ -35,12 +35,12 @@
 /* The custom Pi browser starts here; navigate up/down from it. Unlike an ASL
  * requester (which only sees Amiga volumes), this asks the daemon to list real
  * Pi directories, so it returns absolute Pi paths directly. */
-#define A314_BROWSE_ROOT "/home/laine"
+#define A314_BROWSE_ROOT "/home"
 
 unsigned long __stack = 16000;
 
 static const char verstag[] __attribute__((used)) =
-    "$VER: A314MountGUI 0.1 (07.06.2026)";
+    "$VER: A314MountGUI 0.1.1 (02.10.2026)";
 
 struct IntuitionBase *IntuitionBase = NULL;
 struct GfxBase       *GfxBase       = NULL;

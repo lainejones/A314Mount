@@ -1,9 +1,9 @@
 @database A314Mount.guide
-@$VER: A314Mount.guide 1.0 (07.06.2026)
+@$VER: A314Mount.guide 1.1 (02.10.2026)
 @author Laine Jones
 @wordwrap
 
-@node Main "A314Mount 0.1"
+@node Main "A314Mount 0.1.1"
 
   @{b}A314Mount@{ub} - mount ADF and HDF images on the A314 disk drives
 
@@ -53,6 +53,8 @@
 
   * The a314 @{b}disk driver@{ub} installed: a314disk.device in DEVS: and the
     PD0: to PD3: drives mounted. See @{" Installation " link Install}.
+
+  * AmigaOS 3.0 or newer.
 
   The daemon on :23890 is an @{b}on-demand@{ub} service - it only starts (and
   starts listening) once the Amiga opens a drive, so the drive must exist and

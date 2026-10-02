@@ -23,7 +23,7 @@
 unsigned long __stack = 16000;
 
 static const char verstag[] __attribute__((used)) =
-    "$VER: A314Mount 0.1 (07.06.2026)";
+    "$VER: A314Mount 0.1.1 (02.10.2026)";
 
 #define TEMPLATE "INSERT/S,EJECT/S,DRIVE/N/K,IMAGE,RW/S,HOST/K,PORT/N/K,SHOW/S"
 enum { ARG_INSERT, ARG_EJECT, ARG_DRIVE, ARG_ADF, ARG_RW,
