@@ -127,6 +127,21 @@
   It is fully standalone: it lists directories by running the stock @{b}pi@{ub}
   command (the a314 picmd service), so nothing on the Pi needs modifying.
 
+  @{b}Menus@{ub} (right mouse button)
+
+    Project:  About..., Quit (Amiga-Q)
+    Disk:     Insert (Amiga-I), Eject (Amiga-E), Choose image... (Amiga-O),
+              Drive PD0: to PD3: (Amiga-0 to 3), Read-write (Amiga-W)
+    Settings: Connection..., Drive and browser...,
+              Snapshot window, Unsnapshot window
+
+  @{b}Settings@{ub} pages have Save, Use, Defaults and Cancel. Save writes
+  ENV:A314Mount.prefs and ENVARC:A314Mount.prefs (kept); Use writes ENV:
+  only (until reboot). The file is plain KEY=value lines: HOST, PORT,
+  DRIVE (0-3), RW (0/1), BROWSE (where the Pi browser starts) and WINDOW
+  (from Snapshot window). Built-in defaults apply first, then the file; the
+  GUI reads no tooltypes.
+
 @endnode
 
 @node HDF "ADF vs HDF"

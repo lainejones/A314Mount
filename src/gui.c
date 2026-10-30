@@ -2,15 +2,37 @@
  * A314Mount - GadTools GUI front end (AmigaOS 3.x, no external deps)
  *
  *  +------------------------------------------------+
- *  |  Drive  [ PD0: v]        [x] Read-write         |
- *  |  Image  [/home/pi/Workbench.adf____________]    |
- *  |  [ Insert ] [ Eject ]        Ready             |
+ *  |  Drive  [ PD0: v]        Read-write [x]         |
+ *  |  Image  [/home/pi/Workbench.adf____________] [] |
+ *  |  [ Insert ] [ Eject ]  Ready                    |
  *  |  Host [127.0.0.1______]  Port [23890__]        |
  *  +------------------------------------------------+
  *
  * Mounts an ADF (floppy) or HDF (hard-disk) image on one of the a314 virtual
  * drives PD0:-PD3:. Insert/Eject send one line to the a314 disk daemon over
  * bsdsocket (a314bsd), then report the result in the status line.
+ *
+ * Menus (right mouse button):
+ *   Project:  About...  |  Quit (A-Q)
+ *   Disk:     Insert (A-I), Eject (A-E), Choose image... (A-O)  |
+ *             Drive PD0:..PD3: (A-0..A-3)  |  Read-write (A-W)
+ *   Settings: Connection...  Drive and browser...  |
+ *             Snapshot window, Unsnapshot window
+ *
+ * ---- settings ------------------------------------------------------------
+ * Where each value comes from, lowest first:
+ *   1. the built-in defaults (setsDefault): drive PD0:, read-only, host
+ *      127.0.0.1, port 23890, browse from /home, the default window;
+ *   2. the settings file A314Mount.prefs: ENV:A314Mount.prefs, else
+ *      ENVARC:A314Mount.prefs. A settings page's Save writes both (kept),
+ *      Use writes ENV: only (lasts until the next reboot). Plain text, one
+ *      KEY=value a line:
+ *        HOST=127.0.0.1   PORT=23890   DRIVE=0..3   RW=0|1   BROWSE=/home
+ *        WINDOW=x,y,w,h   (Settings > Snapshot window; none = default place)
+ * A314MountGUI reads no tooltypes, so there are none for the file to
+ * override; should tooltypes be added, the file is applied on top of them.
+ * The main window's fields start from these values; changing a field in the
+ * window does not change the settings.
  */
 
 #include <exec/types.h>
@@ -19,6 +41,7 @@
 #include <exec/memory.h>
 #include <intuition/intuition.h>
 #include <libraries/gadtools.h>
+#include <graphics/text.h>
 #include <dos/dos.h>
 #include <dos/dostags.h>
 
@@ -31,20 +54,142 @@
 #include <string.h>
 
 #include "a314disk.h"
+#include "amigui.h"
 
-/* The custom Pi browser starts here; navigate up/down from it. Unlike an ASL
- * requester (which only sees Amiga volumes), this asks the daemon to list real
- * Pi directories, so it returns absolute Pi paths directly. */
-#define A314_BROWSE_ROOT "/home"
+#define GUI_NAME    "A314Mount"
+#define GUI_VERSION "0.2"
+#define PREFS_NAME  "A314Mount.prefs"
+
+/* The custom Pi browser starts here unless BROWSE= says otherwise (Settings >
+ * Drive and browser). Unlike an ASL requester (which only sees Amiga volumes),
+ * it asks the Pi to list real Pi directories, so it returns absolute Pi paths. */
+#define DEF_BROWSE  "/home"
+#define DEF_PORT    "23890"
+
+#define DEF_WIN_W   440      /* a classic window: never wider than MAX_WIN_W */
+#define MAX_WIN_W   600
 
 unsigned long __stack = 16000;
 
 static const char verstag[] __attribute__((used)) =
-    "$VER: A314MountGUI 0.1.1 (02.10.2026)";
+    "$VER: A314MountGUI " GUI_VERSION " (30.10.2026)";
 
 struct IntuitionBase *IntuitionBase = NULL;
 struct GfxBase       *GfxBase       = NULL;
 struct Library       *GadToolsBase  = NULL;
+
+static struct TextAttr topaz8 = { (STRPTR)"topaz.font", 8, FS_NORMAL, FPF_ROMFONT };
+
+/* ---- settings ------------------------------------------------------------ */
+
+struct Settings {
+    char host[64];
+    char port[8];
+    WORD drive;                   /* 0..3 = PD0:..PD3: */
+    BOOL rw;
+    char browse[256];             /* the Pi directory the browser starts in */
+    LONG winx, winy, winw, winh;  /* the snapshot; winw 0 = none */
+};
+static struct Settings g_set;
+
+static void setStr(char *dst, int size, const char *v)
+{
+    strncpy(dst, v, size - 1); dst[size - 1] = '\0';
+}
+
+/* a port number 1..65535, else 0 */
+static UWORD portOf(const char *s)
+{
+    LONG v = 0;
+    if (!s || !*s) return 0;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s++ - '0'); if (v > 65535) return 0; }
+    return (UWORD)(*s ? 0 : v);
+}
+
+static LONG getNum(char **pp)
+{
+    char *p = *pp; LONG v = 0; int neg = 0;
+    while (*p == ' ') p++;
+    if (*p == '-') { neg = 1; p++; }
+    while (*p >= '0' && *p <= '9') v = v * 10 + (*p++ - '0');
+    *pp = p;
+    return neg ? -v : v;
+}
+
+static char *putNum(char *p, LONG v)
+{
+    char t[12]; int i = 0;
+    if (v < 0) { *p++ = '-'; v = -v; }
+    do { t[i++] = (char)('0' + v % 10); v /= 10; } while (v);
+    while (i) *p++ = t[--i];
+    *p = '\0';
+    return p;
+}
+
+static void setsDefault(struct Settings *s)
+{
+    memset(s, 0, sizeof *s);
+    strcpy(s->host, A314_DEF_HOST);
+    strcpy(s->port, DEF_PORT);
+    strcpy(s->browse, DEF_BROWSE);
+}
+
+static void setsLoad(struct Settings *s)
+{
+    char buf[800], *line, *next;
+    setsDefault(s);
+    if (amg_env_read(PREFS_NAME, buf, sizeof buf) < 0) return;
+    for (line = buf; line && *line; line = next) {
+        char *v;
+        if ((next = strchr(line, '\n'))) *next++ = '\0';
+        if ((v = strchr(line, '\r'))) *v = '\0';
+        if (!(v = strchr(line, '='))) continue;
+        *v++ = '\0';
+        if      (!strcmp(line, "HOST"))   { if (*v) setStr(s->host, sizeof s->host, v); }
+        else if (!strcmp(line, "PORT"))   { if (portOf(v)) setStr(s->port, sizeof s->port, v); }
+        else if (!strcmp(line, "DRIVE"))  { if (v[0] >= '0' && v[0] <= '3' && !v[1]) s->drive = (WORD)(v[0] - '0'); }
+        else if (!strcmp(line, "RW"))     s->rw = (v[0] == '1') ? TRUE : FALSE;
+        else if (!strcmp(line, "BROWSE")) { if (v[0] == '/') setStr(s->browse, sizeof s->browse, v); }
+        else if (!strcmp(line, "WINDOW")) {
+            LONG n[4]; int k;
+            for (k = 0; k < 4 && *v; k++) {
+                n[k] = getNum(&v);
+                if (*v == ',') v++;
+            }
+            if (k == 4 && n[2] > 0 && n[3] > 0) {
+                s->winx = n[0]; s->winy = n[1]; s->winw = n[2]; s->winh = n[3];
+            }
+        }
+    }
+}
+
+static void addLine(char *buf, const char *key, const char *val)
+{
+    strcat(buf, key); strcat(buf, "="); strcat(buf, val); strcat(buf, "\n");
+}
+
+/* keep = Save (ENV: + ENVARC:), else Use (ENV: only) */
+static BOOL setsWrite(const struct Settings *s, BOOL keep)
+{
+    char buf[800], n[48], *p;
+    buf[0] = '\0';
+    addLine(buf, "HOST", s->host);
+    addLine(buf, "PORT", s->port);
+    n[0] = (char)('0' + s->drive); n[1] = '\0';
+    addLine(buf, "DRIVE", n);
+    addLine(buf, "RW", s->rw ? "1" : "0");
+    addLine(buf, "BROWSE", s->browse);
+    if (s->winw > 0) {
+        p = putNum(n, s->winx); *p++ = ',';
+        p = putNum(p, s->winy); *p++ = ',';
+        p = putNum(p, s->winw); *p++ = ',';
+        putNum(p, s->winh);
+        addLine(buf, "WINDOW", n);
+    }
+    return amg_env_write(PREFS_NAME, buf, strlen(buf), keep) ? TRUE : FALSE;
+}
+
+/* ---- the main window ----------------------------------------------------- */
 
 enum { GAD_DRIVE = 1, GAD_RW, GAD_ADF, GAD_INSERT, GAD_EJECT, GAD_STATUS,
        GAD_HOST, GAD_PORT, GAD_BROWSE };
@@ -56,12 +201,22 @@ struct Gui {
     struct Gadget *glist;
     struct Gadget *gDrive, *gRW, *gAdf, *gInsert, *gEject, *gStatus, *gHost, *gPort;
     struct Menu   *menu;
+    BOOL           strip;     /* the menu strip is set on win */
+
+    struct TextAttr *ta;      /* the gadget font: the screen's, or Topaz 8 if too big */
+    struct TextFont *font;
+    struct RastPort  mrp;     /* for measuring text in that font */
+    WORD  lab, cyw, bw, pw;   /* label column, cycle, button and port widths */
+    WORD  minIn, innerH;      /* the narrowest inner width; the inner height */
+
+    struct Requester blk;     /* blocks the main window while a page is open */
+    BOOL  blocked;
 
     char  status[80];
     char  saveAdf[210];
     char  saveHost[64];
     char  savePort[16];
-    WORD  drive;          /* 0 = PD0:, 1 = PD1: */
+    WORD  drive;          /* 0 = PD0: .. 3 = PD3: */
     BOOL  rw;
     WORD  prevW;          /* last window width, to ignore no-op NEWSIZE */
 };
@@ -90,12 +245,69 @@ static struct Gadget browseGad = {
     (APTR)&folderImage, NULL, NULL, 0, NULL, GAD_BROWSE, NULL
 };
 
-#define MENU_QUIT 1
+/* ---- menus ---------------------------------------------------------------- */
+
+enum { MN_ABOUT = 1, MN_QUIT, MN_INSERT, MN_EJECT, MN_BROWSE,
+       MN_PD0, MN_PD1, MN_PD2, MN_PD3, MN_RW,
+       MN_SET_CONN, MN_SET_DRIVE, MN_SNAPSHOT, MN_UNSNAPSHOT };
+
+/* Disk menu item positions (bars count): Insert 0, Eject 1, Choose 2, bar 3,
+ * PD0: 4 .. PD3: 7 - each drive excludes the other three. */
 static struct NewMenu amiNewMenu[] = {
-    { NM_TITLE, (STRPTR)"Project", NULL,        0, 0, NULL },
-    { NM_ITEM,  (STRPTR)"Quit",    (STRPTR)"Q", 0, 0, (APTR)MENU_QUIT },
-    { NM_END,   NULL,              NULL,        0, 0, NULL }
+    { NM_TITLE, (STRPTR)"Project",              NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"About...",             NULL,        0, 0, (APTR)MN_ABOUT },
+    { NM_ITEM,  NM_BARLABEL,                    NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Quit",                 (STRPTR)"Q", 0, 0, (APTR)MN_QUIT },
+
+    { NM_TITLE, (STRPTR)"Disk",                 NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Insert",               (STRPTR)"I", 0, 0, (APTR)MN_INSERT },
+    { NM_ITEM,  (STRPTR)"Eject",                (STRPTR)"E", 0, 0, (APTR)MN_EJECT },
+    { NM_ITEM,  (STRPTR)"Choose image...",      (STRPTR)"O", 0, 0, (APTR)MN_BROWSE },
+    { NM_ITEM,  NM_BARLABEL,                    NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Drive PD0:",           (STRPTR)"0", CHECKIT | CHECKED, 0xE0, (APTR)MN_PD0 },
+    { NM_ITEM,  (STRPTR)"Drive PD1:",           (STRPTR)"1", CHECKIT, 0xD0, (APTR)MN_PD1 },
+    { NM_ITEM,  (STRPTR)"Drive PD2:",           (STRPTR)"2", CHECKIT, 0xB0, (APTR)MN_PD2 },
+    { NM_ITEM,  (STRPTR)"Drive PD3:",           (STRPTR)"3", CHECKIT, 0x70, (APTR)MN_PD3 },
+    { NM_ITEM,  NM_BARLABEL,                    NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Read-write",           (STRPTR)"W", CHECKIT | MENUTOGGLE, 0, (APTR)MN_RW },
+
+    { NM_TITLE, (STRPTR)"Settings",             NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Connection...",        NULL,        0, 0, (APTR)MN_SET_CONN },
+    { NM_ITEM,  (STRPTR)"Drive and browser...", NULL,        0, 0, (APTR)MN_SET_DRIVE },
+    { NM_ITEM,  NM_BARLABEL,                    NULL,        0, 0, NULL },
+    { NM_ITEM,  (STRPTR)"Snapshot window",      NULL,        0, 0, (APTR)MN_SNAPSHOT },
+    { NM_ITEM,  (STRPTR)"Unsnapshot window",    NULL,        0, 0, (APTR)MN_UNSNAPSHOT },
+    { NM_END,   NULL,                           NULL,        0, 0, NULL }
 };
+
+static struct MenuItem *findItem(struct Menu *m, ULONG id)
+{
+    for (; m; m = m->NextMenu) {
+        struct MenuItem *it;
+        for (it = m->FirstItem; it; it = it->NextItem)
+            if ((ULONG)GTMENUITEM_USERDATA(it) == id) return it;
+    }
+    return NULL;
+}
+
+/* make the Disk menu's checkmarks show g->drive and g->rw */
+static void syncMenu(struct Gui *g)
+{
+    struct MenuItem *it;
+    int i;
+    if (!g->menu) return;
+    if (g->strip) ClearMenuStrip(g->win);
+    for (i = 0; i < 4; i++)
+        if ((it = findItem(g->menu, MN_PD0 + i))) {
+            if (i == g->drive) it->Flags |= CHECKED; else it->Flags &= ~CHECKED;
+        }
+    if ((it = findItem(g->menu, MN_RW))) {
+        if (g->rw) it->Flags |= CHECKED; else it->Flags &= ~CHECKED;
+    }
+    if (g->strip) ResetMenuStrip(g->win, g->menu);
+}
+
+/* ---- small helpers -------------------------------------------------------- */
 
 static CONST_STRPTR gadStr(struct Gadget *g)
 {
@@ -103,12 +315,59 @@ static CONST_STRPTR gadStr(struct Gadget *g)
     return (CONST_STRPTR)si->Buffer;
 }
 
+static WORD tlen(struct Gui *g, const char *s)
+{
+    return (WORD)TextLength(&g->mrp, (STRPTR)s, strlen(s));
+}
+
+static WORD maxw(WORD a, WORD b) { return a > b ? a : b; }
+
 static void setStatus(struct Gui *g, CONST_STRPTR t)
 {
     strncpy(g->status, (const char *)t, sizeof g->status - 1);
     g->status[sizeof g->status - 1] = '\0';
     if (g->gStatus)
         GT_SetGadgetAttrs(g->gStatus, g->win, NULL, GTTX_Text, (ULONG)g->status, TAG_END);
+}
+
+/* short wording for the status line (the CLI keeps the long texts) */
+static CONST_STRPTR guiErr(LONG r)
+{
+    switch (r) {
+    case A314_ERR_LIB:  return (CONST_STRPTR)"No bsdsocket.library";
+    case A314_ERR_SOCK: return (CONST_STRPTR)"No socket";
+    case A314_ERR_HOST: return (CONST_STRPTR)"Host must be an IP";
+    case A314_ERR_CONN: return (CONST_STRPTR)"Daemon not reachable";
+    case A314_ERR_SEND: return (CONST_STRPTR)"Send failed";
+    default:            return a314ErrText(r);
+    }
+}
+
+static void setDrive(struct Gui *g, WORD d)
+{
+    g->drive = d;
+    if (g->gDrive) GT_SetGadgetAttrs(g->gDrive, g->win, NULL, GTCY_Active, (ULONG)d, TAG_END);
+    syncMenu(g);
+}
+
+static void setRW(struct Gui *g, BOOL rw)
+{
+    g->rw = rw;
+    if (g->gRW) GT_SetGadgetAttrs(g->gRW, g->win, NULL, GTCB_Checked, (ULONG)rw, TAG_END);
+    syncMenu(g);
+}
+
+/* Block the main window (an empty requester) while a modal window is open,
+ * so clicks and menu picks made meanwhile don't run afterwards. */
+static void busy(struct Gui *g, BOOL on)
+{
+    if (on && !g->blocked) {
+        InitRequester(&g->blk);
+        g->blocked = Request(&g->blk, g->win) ? TRUE : FALSE;
+    } else if (!on && g->blocked) {
+        EndRequest(&g->blk, g->win);
+        g->blocked = FALSE;
+    }
 }
 
 /* ---- custom Pi-directory browser (a file requester over the daemon) ------- */
@@ -293,7 +552,7 @@ static void bChoose(struct Browser *b, struct BItem *it)
     strncpy(g->saveAdf, path, sizeof g->saveAdf - 1);
     g->saveAdf[sizeof g->saveAdf - 1] = '\0';
     GT_SetGadgetAttrs(g->gAdf, g->win, NULL, GTST_String, (ULONG)g->saveAdf, TAG_END);
-    setStatus(g, "Image selected - click Insert.");
+    setStatus(g, "Image set - click Insert");
 }
 
 /* Open the browser, let the user pick a Pi image, drop its path in the field. */
@@ -303,23 +562,27 @@ static void doBrowse(struct Gui *g)
     struct NewGadget ng;
     struct Gadget *gad;
     struct Screen *sc = g->scr;
-    WORD winw, winh, cl, cr, y, by, gh, row;
+    WORD winw, winh, wtop, cl, cr, y, by, gh, row, bw;
     BOOL done = FALSE;
 
     memset(&b, 0, sizeof b);
     b.g = g; b.selected = -1;
     bInitList(&b.items);
-    strcpy(b.curdir, A314_BROWSE_ROOT);
+    setStr(b.curdir, sizeof b.curdir, g_set.browse[0] == '/' ? g_set.browse : DEF_BROWSE);
 
-    gh  = (WORD)((sc->Font ? sc->Font->ta_YSize : 8) + 3);
+    gh  = (WORD)(g->font->tf_YSize + 3);
     row = gh + 3;
+    bw  = maxw(maxw(tlen(g, "Parent"), tlen(g, "Open")), tlen(g, "Cancel")) + 16;
+    if (bw < 90) bw = 90;
+    wtop = sc->BarHeight + 1;
     winw = 360; if (winw > sc->Width) winw = sc->Width;
-    winh = 200; if (winh > sc->Height - sc->BarHeight - 2) winh = sc->Height - sc->BarHeight - 2;
+    winh = 200; if (winh > sc->Height - wtop) winh = sc->Height - wtop;
 
     b.win = OpenWindowTags(NULL,
         WA_Title,     (ULONG)"Select image on the Pi",
-        WA_Left,      (sc->Width - winw) / 2, WA_Top, sc->BarHeight + 10,
+        WA_Left,      (sc->Width - winw) / 2, WA_Top, wtop,
         WA_Width,     winw, WA_Height, winh,
+        WA_AutoAdjust, TRUE,
         WA_Flags,     WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_CLOSEGADGET | WFLG_ACTIVATE,
         WA_IDCMP,     IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | LISTVIEWIDCMP | BUTTONIDCMP,
         WA_PubScreen, (ULONG)sc,
@@ -331,16 +594,17 @@ static void doBrowse(struct Gui *g)
     cl = b.win->BorderLeft + 4;
     cr = b.win->Width - b.win->BorderRight - 4;
     y  = b.win->BorderTop + 2;
-    by = winh - b.win->BorderBottom - gh - 3;      /* button row */
+    by = b.win->Height - b.win->BorderBottom - gh - 3;      /* button row */
 
     gad = CreateContext(&b.glist);
     memset(&ng, 0, sizeof ng);
-    ng.ng_VisualInfo = g->vi; ng.ng_TextAttr = sc->Font;
+    ng.ng_VisualInfo = g->vi; ng.ng_TextAttr = g->ta;
 
     ng.ng_LeftEdge = cl; ng.ng_TopEdge = y; ng.ng_Width = cr - cl; ng.ng_Height = gh;
     ng.ng_Flags = 0; ng.ng_GadgetID = 0;
     gad = b.gPath = CreateGadget(TEXT_KIND, gad, &ng,
-                                 GTTX_Text, (ULONG)b.curdir, GTTX_Border, TRUE, TAG_END);
+                                 GTTX_Text, (ULONG)b.curdir, GTTX_Border, TRUE,
+                                 GTTX_Clipped, TRUE, TAG_END);
 
     ng.ng_TopEdge = y + row; ng.ng_Height = by - (y + row) - 3; ng.ng_Width = cr - cl;
     ng.ng_GadgetID = BGAD_LIST;
@@ -348,12 +612,12 @@ static void doBrowse(struct Gui *g)
                                  GTLV_Labels, (ULONG)&b.items,
                                  GTLV_ShowSelected, 0L, GTLV_Selected, ~0, TAG_END);
 
-    ng.ng_TopEdge = by; ng.ng_Height = gh; ng.ng_Width = 90;
-    ng.ng_LeftEdge = cl;      ng.ng_GadgetText = (UBYTE *)"Parent"; ng.ng_GadgetID = BGAD_PARENT;
+    ng.ng_TopEdge = by; ng.ng_Height = gh; ng.ng_Width = bw;
+    ng.ng_LeftEdge = cl;          ng.ng_GadgetText = (UBYTE *)"Parent"; ng.ng_GadgetID = BGAD_PARENT;
     gad = CreateGadget(BUTTON_KIND, gad, &ng, TAG_END);
-    ng.ng_LeftEdge = cl + 96; ng.ng_GadgetText = (UBYTE *)"Open";   ng.ng_GadgetID = BGAD_OPEN;
+    ng.ng_LeftEdge = cl + bw + 6; ng.ng_GadgetText = (UBYTE *)"Open";   ng.ng_GadgetID = BGAD_OPEN;
     gad = CreateGadget(BUTTON_KIND, gad, &ng, TAG_END);
-    ng.ng_LeftEdge = cr - 90; ng.ng_GadgetText = (UBYTE *)"Cancel"; ng.ng_GadgetID = BGAD_CANCEL;
+    ng.ng_LeftEdge = cr - bw;     ng.ng_GadgetText = (UBYTE *)"Cancel"; ng.ng_GadgetID = BGAD_CANCEL;
     gad = CreateGadget(BUTTON_KIND, gad, &ng, TAG_END);
 
     if (gad) {
@@ -402,6 +666,13 @@ static void doBrowse(struct Gui *g)
     bFreeItems(&b.items);
 }
 
+static void browseModal(struct Gui *g)
+{
+    busy(g, TRUE);
+    doBrowse(g);
+    busy(g, FALSE);
+}
+
 /* ------------------------------------------------------------------ */
 
 static void doOp(struct Gui *g, BOOL insert)
@@ -418,7 +689,7 @@ static void doOp(struct Gui *g, BOOL insert)
     if (port == 0) port = A314_DEF_PORT;
     if (!host || host[0] == '\0') host = (CONST_STRPTR)A314_DEF_HOST;
 
-    if (insert && (!adf || adf[0] == '\0')) { doBrowse(g); return; }
+    if (insert && (!adf || adf[0] == '\0')) { browseModal(g); return; }
 
     setStatus(g, insert ? "Inserting..." : "Ejecting...");
     if (insert) {
@@ -434,40 +705,88 @@ static void doOp(struct Gui *g, BOOL insert)
         strcat(buf, insert ? ": inserted" : ": ejected");
         setStatus(g, reply[0] ? (CONST_STRPTR)reply : (CONST_STRPTR)buf);
     } else {
-        setStatus(g, a314ErrText(r));
+        setStatus(g, guiErr(r));
     }
 }
 
-/* ------------------------------------------------------------------ */
+/* ---- layout ------------------------------------------------------------- */
+
+/* Measure what the main window needs in g->font: label column, gadget widths,
+ * the narrowest inner width and the (fixed) inner height. */
+static void measure(struct Gui *g)
+{
+    WORD fh = g->font->tf_YSize, a, b, c, d;
+    g->lab = maxw(maxw(tlen(g, "Drive"), tlen(g, "Image")), tlen(g, "Host")) + 8;
+    g->cyw = tlen(g, "PD0:") + 32;
+    g->bw  = maxw(tlen(g, "Insert"), tlen(g, "Eject")) + 16;
+    g->pw  = tlen(g, "000000") + 12;
+    a = g->lab + g->cyw + 16 + tlen(g, "Read-write") + 8 + CHECKBOX_WIDTH;
+    b = g->lab + 80 + 4 + FOLDER_W;
+    c = 2 * g->bw + 12 + 100;                         /* status: at least 100 */
+    d = g->lab + 80 + 16 + tlen(g, "Port") + g->pw;
+    g->minIn  = maxw(maxw(a, b), maxw(c, d)) + 8;
+    g->innerH = 2 + 3 * (fh + 6) + (fh + 3) + 3;      /* four rows */
+}
+
+static BOOL useFont(struct Gui *g, struct TextAttr *ta)
+{
+    if (!(g->font = OpenFont(ta))) return FALSE;
+    g->ta = ta;
+    InitRastPort(&g->mrp);
+    SetFont(&g->mrp, g->font);
+    measure(g);
+    return TRUE;
+}
+
+/* the outer height the main window will have (the bottom border holds the
+ * size gadget: about 11 pixels) */
+static WORD outerH(struct Gui *g)
+{
+    return (WORD)(g->scr->WBorTop + g->scr->Font->ta_YSize + 1 + g->innerH + 11);
+}
+
+/* The screen's font, unless the window would not fit the screen with it (or
+ * be wider than a classic window) - then Topaz 8. */
+static BOOL chooseFont(struct Gui *g)
+{
+    struct Screen *sc = g->scr;
+    if (useFont(g, sc->Font)) {
+        if (g->minIn + 24 <= MAX_WIN_W && g->minIn + 24 <= sc->Width &&
+            outerH(g) <= sc->Height - sc->BarHeight - 1)
+            return TRUE;
+        CloseFont(g->font); g->font = NULL;
+    }
+    return useFont(g, &topaz8);
+}
 
 static BOOL makeGadgets(struct Gui *g)
 {
     struct NewGadget ng;
     struct Gadget *gad;
     struct Window *w = g->win;
-    WORD fh = g->scr->Font ? g->scr->Font->ta_YSize : 8;
-    WORD cl = w->BorderLeft + 2;
-    WORD cr = w->Width - w->BorderRight - 2;
-    WORD row = fh + 6, gh = fh + 3, lab = 46;
+    WORD fh = g->font->tf_YSize;
+    WORD cl = w->BorderLeft + 4;
+    WORD cr = w->Width - w->BorderRight - 4;
+    WORD row = fh + 6, gh = fh + 3, lab = g->lab, x;
     WORD y = w->BorderTop + 2;
 
     gad = CreateContext(&g->glist);
     if (!gad) return FALSE;
     memset(&ng, 0, sizeof ng);
     ng.ng_VisualInfo = g->vi;
-    ng.ng_TextAttr   = g->scr->Font;
+    ng.ng_TextAttr   = g->ta;
 
     /* Drive cycle + Read-write checkbox */
-    ng.ng_LeftEdge = cl + lab; ng.ng_TopEdge = y; ng.ng_Width = 70; ng.ng_Height = gh;
+    ng.ng_LeftEdge = cl + lab; ng.ng_TopEdge = y; ng.ng_Width = g->cyw; ng.ng_Height = gh;
     ng.ng_GadgetText = (UBYTE *)"Drive"; ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = GAD_DRIVE;
     gad = g->gDrive = CreateGadget(CYCLE_KIND, gad, &ng,
                                    GTCY_Labels, (ULONG)driveLabels,
                                    GTCY_Active, (ULONG)g->drive, TAG_END);
-    ng.ng_LeftEdge = cr - 22; ng.ng_Width = 22;
+    ng.ng_LeftEdge = cr - CHECKBOX_WIDTH; ng.ng_Width = CHECKBOX_WIDTH;
     ng.ng_GadgetText = (UBYTE *)"Read-write"; ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = GAD_RW;
     gad = g->gRW = CreateGadget(CHECKBOX_KIND, gad, &ng, GTCB_Checked, (ULONG)g->rw, TAG_END);
 
-    /* Image path (ADF/HDF) + a folder button that opens a file requester */
+    /* Image path (ADF/HDF) + a folder button that opens the Pi browser */
     y += row;
     ng.ng_LeftEdge = cl + lab; ng.ng_TopEdge = y;
     ng.ng_Width = cr - (cl + lab) - FOLDER_W - 4; ng.ng_Height = gh;
@@ -479,28 +798,38 @@ static BOOL makeGadgets(struct Gui *g)
 
     /* Insert / Eject + status */
     y += row;
-    ng.ng_LeftEdge = cl; ng.ng_TopEdge = y; ng.ng_Width = 72; ng.ng_Height = gh;
+    ng.ng_LeftEdge = cl; ng.ng_TopEdge = y; ng.ng_Width = g->bw; ng.ng_Height = gh;
     ng.ng_GadgetText = (UBYTE *)"Insert"; ng.ng_Flags = 0; ng.ng_GadgetID = GAD_INSERT;
     gad = g->gInsert = CreateGadget(BUTTON_KIND, gad, &ng, TAG_END);
-    ng.ng_LeftEdge = cl + 78;
+    ng.ng_LeftEdge = cl + g->bw + 6;
     ng.ng_GadgetText = (UBYTE *)"Eject"; ng.ng_GadgetID = GAD_EJECT;
     gad = g->gEject = CreateGadget(BUTTON_KIND, gad, &ng, TAG_END);
-    ng.ng_LeftEdge = cl + 158; ng.ng_Width = cr - (cl + 158); if (ng.ng_Width < 8) ng.ng_Width = 8;
+    x = cl + 2 * g->bw + 12;
+    ng.ng_LeftEdge = x; ng.ng_Width = cr - x; if (ng.ng_Width < 8) ng.ng_Width = 8;
     ng.ng_GadgetText = NULL; ng.ng_GadgetID = GAD_STATUS;
     gad = g->gStatus = CreateGadget(TEXT_KIND, gad, &ng,
-                                    GTTX_Text, (ULONG)g->status, GTTX_Border, FALSE, TAG_END);
+                                    GTTX_Text, (ULONG)g->status, GTTX_Border, FALSE,
+                                    GTTX_Clipped, TRUE, TAG_END);
 
     /* Host / Port */
     y += row;
-    ng.ng_LeftEdge = cl + lab; ng.ng_TopEdge = y; ng.ng_Width = (cr - (cl + lab)) / 2 - 30; ng.ng_Height = gh;
+    ng.ng_LeftEdge = cl + lab; ng.ng_TopEdge = y; ng.ng_Height = gh;
+    ng.ng_Width = cr - g->pw - tlen(g, "Port") - 16 - (cl + lab);
     ng.ng_GadgetText = (UBYTE *)"Host"; ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = GAD_HOST;
     gad = g->gHost = CreateGadget(STRING_KIND, gad, &ng,
                                   GTST_MaxChars, 60, GTST_String, (ULONG)g->saveHost, TAG_END);
-    ng.ng_LeftEdge = cr - 60; ng.ng_Width = 60;
+    ng.ng_LeftEdge = cr - g->pw; ng.ng_Width = g->pw;
     ng.ng_GadgetText = (UBYTE *)"Port"; ng.ng_GadgetID = GAD_PORT;
     gad = g->gPort = CreateGadget(STRING_KIND, gad, &ng,
                                   GTST_MaxChars, 6, GTST_String, (ULONG)g->savePort, TAG_END);
     return (gad != NULL);
+}
+
+static void saveFields(struct Gui *g)
+{
+    if (g->gAdf)  setStr(g->saveAdf,  sizeof g->saveAdf,  (const char *)gadStr(g->gAdf));
+    if (g->gHost) setStr(g->saveHost, sizeof g->saveHost, (const char *)gadStr(g->gHost));
+    if (g->gPort) setStr(g->savePort, sizeof g->savePort, (const char *)gadStr(g->gPort));
 }
 
 /* GadTools gadgets don't reflow on their own; on a resize we snapshot the
@@ -508,15 +837,14 @@ static BOOL makeGadgets(struct Gui *g)
  * at the new width. */
 static void rebuildGadgets(struct Gui *g)
 {
-    if (g->gAdf)  { strncpy(g->saveAdf,  (const char *)gadStr(g->gAdf),  sizeof g->saveAdf - 1);  g->saveAdf[sizeof g->saveAdf - 1] = '\0'; }
-    if (g->gHost) { strncpy(g->saveHost, (const char *)gadStr(g->gHost), sizeof g->saveHost - 1); g->saveHost[sizeof g->saveHost - 1] = '\0'; }
-    if (g->gPort) { strncpy(g->savePort, (const char *)gadStr(g->gPort), sizeof g->savePort - 1); g->savePort[sizeof g->savePort - 1] = '\0'; }
+    saveFields(g);
 
     RemoveGList(g->win, &browseGad, 1);
     if (g->glist) {
         RemoveGList(g->win, g->glist, -1);
         FreeGadgets(g->glist);
         g->glist = NULL;
+        g->gDrive = g->gRW = g->gAdf = g->gInsert = g->gEject = g->gStatus = g->gHost = g->gPort = NULL;
     }
     /* erase old gadget imagery in the interior before re-laying-out */
     SetAPen(g->win->RPort, 0);
@@ -537,32 +865,48 @@ static void rebuildGadgets(struct Gui *g)
 static BOOL buildWindow(struct Gui *g)
 {
     struct Screen *sc;
-    WORD winw, winh;
+    LONG x, y, w, h, minW;
 
     g->scr = LockPubScreen(NULL);
     if (!g->scr) return FALSE;
     g->vi = GetVisualInfo(g->scr, TAG_END);
     if (!g->vi) return FALSE;
+    if (!chooseFont(g)) return FALSE;
     sc = g->scr;
     strcpy(g->status, "Ready");
 
-    winw = 400; if (winw > sc->Width) winw = sc->Width;
-    winh = 100; if (winh > sc->Height - sc->BarHeight - 2) winh = sc->Height - sc->BarHeight - 2;
+    /* the snapshot place and width (Settings > Snapshot window), kept on the
+     * screen; else a classic-size window centred under the screen title */
+    minW = g->minIn + 24;
+    w = DEF_WIN_W; y = sc->BarHeight + 2; h = outerH(g);
+    if (g_set.winw > 0) { w = g_set.winw; y = g_set.winy; }
+    if (w < minW) w = minW;
+    if (w > sc->Width) w = sc->Width;
+    x = (g_set.winw > 0) ? g_set.winx : (sc->Width - w) / 2;
+    if (x + w > sc->Width) x = sc->Width - w;
+    if (y + h > sc->Height) y = sc->Height - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
 
     g->win = OpenWindowTags(NULL,
-        WA_Title,     (ULONG)"A314Mount",
-        WA_Left,      (sc->Width - winw) / 2, WA_Top, sc->BarHeight + 2,
-        WA_Width,     winw, WA_Height, winh,
-        WA_MinWidth,  320, WA_MaxWidth, sc->Width,
-        WA_MinHeight, winh, WA_MaxHeight, winh,   /* stretch width; height fixed */
-        WA_Flags,     WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_CLOSEGADGET |
-                      WFLG_SIZEGADGET | WFLG_ACTIVATE,
-        WA_IDCMP,     IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MENUPICK |
-                      IDCMP_NEWSIZE |
-                      BUTTONIDCMP | STRINGIDCMP | CYCLEIDCMP | CHECKBOXIDCMP,
-        WA_PubScreen, (ULONG)g->scr,
+        WA_Title,      (ULONG)"A314Mount",
+        WA_Left,       (ULONG)x, WA_Top, (ULONG)y,
+        WA_Width,      (ULONG)w, WA_InnerHeight, (ULONG)g->innerH,
+        WA_MinWidth,   (ULONG)(minW < sc->Width ? minW : sc->Width), WA_MaxWidth, (ULONG)sc->Width,
+        WA_MinHeight,  40, WA_MaxHeight, (ULONG)sc->Height,
+        WA_AutoAdjust, TRUE,
+        WA_Flags,      WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_CLOSEGADGET |
+                       WFLG_SIZEGADGET | WFLG_SIZEBBOTTOM | WFLG_ACTIVATE,
+        WA_IDCMP,      IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MENUPICK |
+                       IDCMP_NEWSIZE |
+                       BUTTONIDCMP | STRINGIDCMP | CYCLEIDCMP | CHECKBOXIDCMP,
+        WA_PubScreen,  (ULONG)g->scr,
         TAG_END);
     if (!g->win) return FALSE;
+    /* the real borders are known now: stretch width only, height fixed */
+    minW = g->minIn + g->win->BorderLeft + g->win->BorderRight;
+    if (minW > g->win->Width) minW = g->win->Width;
+    WindowLimits(g->win, minW, g->win->Height, sc->Width, g->win->Height);
     g->prevW = g->win->Width;
 
     if (makeGadgets(g)) {
@@ -574,20 +918,199 @@ static BOOL buildWindow(struct Gui *g)
     }
     g->menu = CreateMenus(amiNewMenu, TAG_END);
     if (g->menu) {
-        if (LayoutMenus(g->menu, g->vi, TAG_END)) SetMenuStrip(g->win, g->menu);
-        else { FreeMenus(g->menu); g->menu = NULL; }
+        if (LayoutMenus(g->menu, g->vi, TAG_END)) {
+            syncMenu(g);
+            g->strip = SetMenuStrip(g->win, g->menu) ? TRUE : FALSE;
+        } else { FreeMenus(g->menu); g->menu = NULL; }
     }
     return TRUE;
 }
 
 static void closeWin(struct Gui *g)
 {
-    if (g->win && g->menu) ClearMenuStrip(g->win);
-    if (g->menu)  { FreeMenus(g->menu);        g->menu = NULL; }
-    if (g->win)   { CloseWindow(g->win);       g->win = NULL; }
-    if (g->glist) { FreeGadgets(g->glist);     g->glist = NULL; }
-    if (g->vi)    { FreeVisualInfo(g->vi);     g->vi = NULL; }
-    if (g->scr)   { UnlockPubScreen(NULL, g->scr); g->scr = NULL; }
+    busy(g, FALSE);
+    if (g->strip)  { ClearMenuStrip(g->win);    g->strip = FALSE; }
+    if (g->menu)   { FreeMenus(g->menu);        g->menu = NULL; }
+    if (g->win)    { CloseWindow(g->win);       g->win = NULL; }
+    if (g->glist)  { FreeGadgets(g->glist);     g->glist = NULL; }
+    if (g->font)   { CloseFont(g->font);        g->font = NULL; }
+    if (g->vi)     { FreeVisualInfo(g->vi);     g->vi = NULL; }
+    if (g->scr)    { UnlockPubScreen(NULL, g->scr); g->scr = NULL; }
+}
+
+/* ---- settings pages ------------------------------------------------------ */
+
+static void reportWrite(struct Gui *g, int r)
+{
+    if (!setsWrite(&g_set, r == AMG_SAVE))
+        setStatus(g, "Could not write prefs");
+    else
+        setStatus(g, r == AMG_SAVE ? "Settings saved" : "Settings in use");
+}
+
+static void connGadget(AmgPage *pg, int id, UWORD code, void *ctx)
+{
+    (void)code; (void)ctx;
+    if (id == AMG_ID_DEFAULTS) {
+        GT_SetGadgetAttrs(pg->g[0], pg->win, NULL, GTST_String, (ULONG)A314_DEF_HOST, TAG_END);
+        GT_SetGadgetAttrs(pg->g[1], pg->win, NULL, GTST_String, (ULONG)DEF_PORT, TAG_END);
+    }
+}
+
+/* Settings > Connection...: the daemon's host and port */
+static void pageConn(struct Gui *g)
+{
+    AmgPage pg;
+    struct NewGadget ng;
+    struct Gadget *gad;
+    int lw, w, h, bh, rowh, y, r = AMG_CANCEL;
+
+    bh = g->font->tf_YSize + 6; rowh = bh + 4;
+    lw = maxw(tlen(g, "Host"), tlen(g, "Port")) + 16;
+    w = 8 + lw + tlen(g, "255.255.255.255") + 40 + 8;
+    if (w < amg_min_width(g->ta)) w = amg_min_width(g->ta);
+    if (w > MAX_WIN_W - 24) w = MAX_WIN_W - 24;
+    h = 4 + 2 * rowh + 6 + bh + 4;
+    if (!amg_page_open(&pg, g->scr, g->vi, g->ta, g->win, "A314Mount: Connection", w, h)) return;
+    gad = CreateContext(&pg.glist);
+    memset(&ng, 0, sizeof ng);
+    ng.ng_VisualInfo = g->vi; ng.ng_TextAttr = g->ta;
+    ng.ng_LeftEdge = pg.win->BorderLeft + 8 + lw; ng.ng_Height = bh; ng.ng_Flags = PLACETEXT_LEFT;
+    y = 4;
+    ng.ng_TopEdge = pg.win->BorderTop + y; y += rowh;
+    ng.ng_Width = w - 16 - lw;
+    ng.ng_GadgetText = (UBYTE *)"Host"; ng.ng_GadgetID = 1;
+    pg.g[0] = gad = CreateGadget(STRING_KIND, gad, &ng, GTST_String, (ULONG)g_set.host,
+                                 GTST_MaxChars, (ULONG)(sizeof g_set.host - 1), TAG_END);
+    ng.ng_TopEdge = pg.win->BorderTop + y; y += rowh;
+    ng.ng_Width = g->pw;
+    ng.ng_GadgetText = (UBYTE *)"Port"; ng.ng_GadgetID = 2;
+    pg.g[1] = gad = CreateGadget(STRING_KIND, gad, &ng, GTST_String, (ULONG)g_set.port,
+                                 GTST_MaxChars, 5, TAG_END);
+    gad = amg_buttons(&pg, gad, y + 6, w, 1);
+    if (gad) {
+        amg_page_show(&pg);
+        r = amg_page_run(&pg, connGadget, g);
+        if (r != AMG_CANCEL) {
+            const char *s = amg_string(pg.g[0]);
+            setStr(g_set.host, sizeof g_set.host, *s ? s : A314_DEF_HOST);
+            s = amg_string(pg.g[1]);
+            setStr(g_set.port, sizeof g_set.port, portOf(s) ? s : DEF_PORT);
+        }
+    }
+    amg_page_close(&pg);
+    if (r != AMG_CANCEL) {           /* in force now, in the window too */
+        GT_SetGadgetAttrs(g->gHost, g->win, NULL, GTST_String, (ULONG)g_set.host, TAG_END);
+        GT_SetGadgetAttrs(g->gPort, g->win, NULL, GTST_String, (ULONG)g_set.port, TAG_END);
+        saveFields(g);
+        reportWrite(g, r);
+    }
+}
+
+struct DriveCtx { WORD drive; };
+
+static void driveGadget(AmgPage *pg, int id, UWORD code, void *ctx)
+{
+    struct DriveCtx *dc = (struct DriveCtx *)ctx;
+    if (id == 1) dc->drive = (WORD)code;
+    else if (id == AMG_ID_DEFAULTS) {
+        dc->drive = 0;
+        GT_SetGadgetAttrs(pg->g[0], pg->win, NULL, GTCY_Active, 0, TAG_END);
+        GT_SetGadgetAttrs(pg->g[1], pg->win, NULL, GTCB_Checked, FALSE, TAG_END);
+        GT_SetGadgetAttrs(pg->g[2], pg->win, NULL, GTST_String, (ULONG)DEF_BROWSE, TAG_END);
+    }
+}
+
+/* Settings > Drive and browser...: the drive and Read-write the window starts
+ * with, and the Pi directory the image browser opens in */
+static void pageDrive(struct Gui *g)
+{
+    AmgPage pg;
+    struct NewGadget ng;
+    struct Gadget *gad;
+    struct DriveCtx dc;
+    int lw, w, h, bh, rowh, y, r = AMG_CANCEL;
+
+    dc.drive = g_set.drive;
+    bh = g->font->tf_YSize + 6; rowh = bh + 4;
+    lw = maxw(maxw(tlen(g, "Drive"), tlen(g, "Read-write")), tlen(g, "Browse from")) + 16;
+    w = 8 + lw + 260 + 8;
+    if (w < amg_min_width(g->ta)) w = amg_min_width(g->ta);
+    if (w > MAX_WIN_W - 24) w = MAX_WIN_W - 24;
+    h = 4 + 3 * rowh + 6 + bh + 4;
+    if (!amg_page_open(&pg, g->scr, g->vi, g->ta, g->win, "A314Mount: Drive and browser", w, h)) return;
+    gad = CreateContext(&pg.glist);
+    memset(&ng, 0, sizeof ng);
+    ng.ng_VisualInfo = g->vi; ng.ng_TextAttr = g->ta;
+    ng.ng_LeftEdge = pg.win->BorderLeft + 8 + lw; ng.ng_Height = bh; ng.ng_Flags = PLACETEXT_LEFT;
+    y = 4;
+    ng.ng_TopEdge = pg.win->BorderTop + y; y += rowh;
+    ng.ng_Width = g->cyw;
+    ng.ng_GadgetText = (UBYTE *)"Drive"; ng.ng_GadgetID = 1;
+    pg.g[0] = gad = CreateGadget(CYCLE_KIND, gad, &ng, GTCY_Labels, (ULONG)driveLabels,
+                                 GTCY_Active, (ULONG)dc.drive, TAG_END);
+    ng.ng_TopEdge = pg.win->BorderTop + y; y += rowh;
+    ng.ng_Width = CHECKBOX_WIDTH;
+    ng.ng_GadgetText = (UBYTE *)"Read-write"; ng.ng_GadgetID = 2;
+    pg.g[1] = gad = CreateGadget(CHECKBOX_KIND, gad, &ng, GTCB_Checked, (ULONG)g_set.rw, TAG_END);
+    ng.ng_TopEdge = pg.win->BorderTop + y; y += rowh;
+    ng.ng_Width = w - 16 - lw;
+    ng.ng_GadgetText = (UBYTE *)"Browse from"; ng.ng_GadgetID = 3;
+    pg.g[2] = gad = CreateGadget(STRING_KIND, gad, &ng, GTST_String, (ULONG)g_set.browse,
+                                 GTST_MaxChars, (ULONG)(sizeof g_set.browse - 1), TAG_END);
+    gad = amg_buttons(&pg, gad, y + 6, w, 1);
+    if (gad) {
+        amg_page_show(&pg);
+        r = amg_page_run(&pg, driveGadget, &dc);
+        if (r != AMG_CANCEL) {
+            const char *s = amg_string(pg.g[2]);
+            g_set.drive = dc.drive;
+            g_set.rw = amg_checked(pg.g[1]) ? TRUE : FALSE;
+            setStr(g_set.browse, sizeof g_set.browse, s[0] == '/' ? s : DEF_BROWSE);
+        }
+    }
+    amg_page_close(&pg);
+    if (r != AMG_CANCEL) {           /* in force now, in the window too */
+        setDrive(g, g_set.drive);
+        setRW(g, g_set.rw);
+        reportWrite(g, r);
+    }
+}
+
+/* ---- events -------------------------------------------------------------- */
+
+/* one menu pick (by its MN_* user data); rwOn = the Read-write item's state.
+ * TRUE = quit */
+static BOOL doMenu(struct Gui *g, ULONG id, BOOL rwOn)
+{
+    switch (id) {
+    case MN_ABOUT:
+        amg_about(g->win, GUI_NAME, GUI_VERSION,
+                  "Inserts and ejects ADF and HDF images in the\n"
+                  "A314's PD0: to PD3: drives, from the Amiga.\n\n"
+                  "Licence: MIT");
+        break;
+    case MN_QUIT:   return TRUE;
+    case MN_INSERT: doOp(g, TRUE);  break;
+    case MN_EJECT:  doOp(g, FALSE); break;
+    case MN_BROWSE: browseModal(g); break;
+    case MN_PD0: case MN_PD1: case MN_PD2: case MN_PD3:
+        setDrive(g, (WORD)(id - MN_PD0)); break;
+    case MN_RW:     setRW(g, rwOn); break;
+    case MN_SET_CONN:  busy(g, TRUE); pageConn(g);  busy(g, FALSE); break;
+    case MN_SET_DRIVE: busy(g, TRUE); pageDrive(g); busy(g, FALSE); break;
+    case MN_SNAPSHOT:     /* this place and width from now on (saved, like Save) */
+        g_set.winx = g->win->LeftEdge; g_set.winy = g->win->TopEdge;
+        g_set.winw = g->win->Width;    g_set.winh = g->win->Height;
+        setStatus(g, setsWrite(&g_set, TRUE) ? "Window snapshot saved" : "Could not write prefs");
+        break;
+    case MN_UNSNAPSHOT:   /* back to the default place and size at the next start */
+        g_set.winw = 0;
+        setStatus(g, setsWrite(&g_set, TRUE) ? "Default window next time" : "Could not write prefs");
+        break;
+    default: break;
+    }
+    return FALSE;
 }
 
 static void eventLoop(struct Gui *g)
@@ -607,20 +1130,31 @@ static void eventLoop(struct Gui *g)
                 done = TRUE; break;
             case IDCMP_GADGETUP:
                 switch (gad->GadgetID) {
-                case GAD_DRIVE:  g->drive = code; break;
-                case GAD_RW:     g->rw = code ? TRUE : FALSE; break;
+                case GAD_DRIVE:  g->drive = (WORD)code; syncMenu(g); break;
+                case GAD_RW:     g->rw = code ? TRUE : FALSE; syncMenu(g); break;
                 case GAD_INSERT: doOp(g, TRUE);  break;
                 case GAD_EJECT:  doOp(g, FALSE); break;
-                case GAD_BROWSE: doBrowse(g);    break;
+                case GAD_BROWSE: browseModal(g); break;
                 default: break;
                 }
                 break;
-            case IDCMP_MENUPICK:
-                if (code != MENUNULL && g->menu) {
+            case IDCMP_MENUPICK: {
+                /* collect the picks first (multi-select via NextSelect), then
+                 * act, so the strip is not changed while it is being walked */
+                ULONG ids[16];
+                BOOL rwOn = g->rw;
+                int n = 0, i;
+                while (code != MENUNULL && n < 16 && g->menu) {
                     struct MenuItem *it = ItemAddress(g->menu, code);
-                    if (it && (ULONG)GTMENUITEM_USERDATA(it) == MENU_QUIT) done = TRUE;
+                    if (!it) break;
+                    ids[n] = (ULONG)GTMENUITEM_USERDATA(it);
+                    if (ids[n] == MN_RW) rwOn = (it->Flags & CHECKED) ? TRUE : FALSE;
+                    n++;
+                    code = it->NextSelect;
                 }
+                for (i = 0; i < n && !done; i++) done = doMenu(g, ids[i], rwOn);
                 break;
+            }
             case IDCMP_NEWSIZE:
                 if (g->win->Width != g->prevW) {
                     g->prevW = g->win->Width;
@@ -642,17 +1176,22 @@ int main(void)
     int rc = 20;
 
     memset(&g, 0, sizeof g);
-    strcpy(g.saveHost, A314_DEF_HOST);
-    strcpy(g.savePort, "23890");
-    g.saveAdf[0] = '\0';                 /* empty: pick via the folder browser */
 
     IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 37);
     GfxBase       = (struct GfxBase *)OpenLibrary("graphics.library", 37);
     GadToolsBase  = OpenLibrary("gadtools.library", 37);
 
-    if (IntuitionBase && GfxBase && GadToolsBase && buildWindow(&g)) {
-        eventLoop(&g);
-        rc = 0;
+    if (IntuitionBase && GfxBase && GadToolsBase) {
+        setsLoad(&g_set);
+        setStr(g.saveHost, sizeof g.saveHost, g_set.host);
+        setStr(g.savePort, sizeof g.savePort, g_set.port);
+        g.saveAdf[0] = '\0';             /* empty: pick via the folder browser */
+        g.drive = g_set.drive;
+        g.rw    = g_set.rw;
+        if (buildWindow(&g)) {
+            eventLoop(&g);
+            rc = 0;
+        }
     }
 
     closeWin(&g);

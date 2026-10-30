@@ -96,7 +96,8 @@ any kind.
 
     src/a314disk.c / .h   bsdsocket engine + command builders
     src/cli.c             command-line front end
-    src/gui.c             GadTools GUI front end
+    src/gui.c             GadTools GUI front end (menus, settings pages)
+    src/amigui.c / .h     shared About box + settings-page frame + ENV:/ENVARC: files
     build.sh              build both with amiga-gcc
     tools/mkpkg.py        stage the release drawer in out/release/
     tools/mock_daemon.py  a safe stand-in daemon for testing
@@ -188,7 +189,45 @@ badged floppy), or run it from a Shell. Pick the **Drive** (PD0:–PD3:), set th
 **Image**, tick **Read-write** if needed, and click **Insert** or **Eject**.
 **Host** / **Port** default to `127.0.0.1` / `23890`. The status line shows the
 result (e.g. `PD0: inserted`). The window is **resizable** (drag the size
-gadget) — it stretches horizontally and the string fields grow with it.
+gadget) — it stretches horizontally and the string fields grow with it. It
+opens 440 pixels wide and fits a 640x200 NTSC screen with Topaz 8; if the
+screen font would make it too big, it uses Topaz 8.
+
+### Menus (right mouse button)
+
+| Menu | Item | Keys |
+|---|---|---|
+| Project | About... (version, licence) | |
+| | Quit | Amiga-Q |
+| Disk | Insert | Amiga-I |
+| | Eject | Amiga-E |
+| | Choose image... (the Pi browser) | Amiga-O |
+| | Drive PD0: … PD3: | Amiga-0 … Amiga-3 |
+| | Read-write (toggle) | Amiga-W |
+| Settings | Connection... (host, port) | |
+| | Drive and browser... (start drive, Read-write, browser start directory) | |
+| | Snapshot window / Unsnapshot window | |
+
+### Settings
+
+Each Settings page has **Save** / **Use** / **Defaults** / **Cancel**, like the
+system prefs editors: **Save** writes `ENV:A314Mount.prefs` *and*
+`ENVARC:A314Mount.prefs` (kept), **Use** writes `ENV:` only (until the next
+reboot). The values take effect in the window at once and are what it starts
+with next time. The file is plain text, one `KEY=value` a line:
+
+    HOST=127.0.0.1
+    PORT=23890
+    DRIVE=0          ; 0-3 = PD0:-PD3:
+    RW=0             ; 1 = Read-write ticked
+    BROWSE=/home     ; where the Pi browser starts
+    WINDOW=x,y,w,h   ; Settings > Snapshot window
+
+**Precedence:** built-in defaults, then the file (`ENV:` first, else
+`ENVARC:`). The GUI reads no icon tooltypes, so there is nothing for the file
+to override. **Snapshot window** saves the window's place and width (always to
+both `ENV:` and `ENVARC:`); it is kept on the screen when it opens.
+**Unsnapshot window** goes back to the default place and size.
 
 Set the **Image** two ways: type the Pi-side path, **or click the folder button**
 at the end of the Image row (clicking Insert with an empty field opens it too).
@@ -197,10 +236,9 @@ scrolling list (subdirectories first with a trailing `/`, then `.adf`/`.hdf`/
 `.adz` files). Select an entry and **Open** to descend into a directory or pick a
 file; **Parent** goes up. Picking a file drops its **absolute Pi path** straight
 into the Image field — it can reach **anywhere on the Pi** you can read, not just
-the a314 share. It starts at **`A314_BROWSE_ROOT`** — a `#define` at the top of
-`src/gui.c`; **change it to wherever you keep your images** (it ships as
-`/home`) and rebuild. Wherever it starts, **Parent**
-walks up, so nothing is out of reach.
+the a314 share. It starts at **`/home`** — set **Browse from** under
+**Settings > Drive and browser...** to wherever you keep your images.
+Wherever it starts, **Parent** walks up, so nothing is out of reach.
 
 > **Fully standalone — no a314 software is modified.** The browser lists Pi
 > directories by running the stock **`pi`** command (`C:pi ls -1Ap <dir>`, the
@@ -238,7 +276,7 @@ committed as `install/A314MountGUI.info`.
 
 ## Possible future work
 
-* Read icon **ToolTypes** (HOST/PORT/DRIVE/ADF) so the Workbench icon can carry
-  defaults instead of typing them each launch.
+* Read icon **ToolTypes** (HOST/PORT/DRIVE/ADF) too, with `A314Mount.prefs`
+  applied on top of them (the Settings menu already keeps these defaults).
 * Expose the disk daemon as a native `a314.device` service to drop the
   `bsdsocket` dependency entirely.

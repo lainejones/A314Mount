@@ -17,7 +17,7 @@ echo "== A314Mount (CLI) =="
 $CC $CFLAGS -o out/A314Mount    src/cli.c src/a314disk.c
 
 echo "== A314MountGUI =="
-$CC $CFLAGS -o out/A314MountGUI src/gui.c src/a314disk.c
+$CC $CFLAGS -o out/A314MountGUI src/gui.c src/amigui.c src/a314disk.c
 
 ls -l out
 echo "Done."
