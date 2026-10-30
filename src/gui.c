@@ -57,7 +57,7 @@
 #include "amigui.h"
 
 #define GUI_NAME    "A314Mount"
-#define GUI_VERSION "0.2"
+#define GUI_VERSION "0.1.2"
 #define PREFS_NAME  "A314Mount.prefs"
 
 /* The custom Pi browser starts here unless BROWSE= says otherwise (Settings >
