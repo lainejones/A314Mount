@@ -1,9 +1,9 @@
 @database A314Mount.guide
-@$VER: A314Mount.guide 1.1 (02.10.2026)
+@$VER: A314Mount.guide 1.2 (30.10.2026)
 @author Laine Jones
 @wordwrap
 
-@node Main "A314Mount 0.1.1"
+@node Main "A314Mount 0.1.2"
 
   @{b}A314Mount@{ub} - mount ADF and HDF images on the A314 disk drives
 
