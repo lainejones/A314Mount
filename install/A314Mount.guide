@@ -1,9 +1,9 @@
 @database A314Mount.guide
-@$VER: A314Mount.guide 1.2 (30.10.2026)
+@$VER: A314Mount.guide 1.3 (30.10.2026)
 @author Laine Jones
 @wordwrap
 
-@node Main "A314Mount 0.1.2"
+@node Main "A314Mount 0.1.3"
 
   @{b}A314Mount@{ub} - mount ADF and HDF images on the A314 disk drives
 
@@ -78,8 +78,10 @@
   The installer places @{b}A314MountGUI@{ub} + its icon in the chosen drawer
   (double-click to launch), copies the @{b}A314Mount@{ub} CLI to C:, and - if
   DEVS:a314disk.device is present - installs the PD0: to PD3: drive
-  descriptors to DEVS:DOSDrivers/. After that, "Mount PD0:" (or a reboot)
-  brings a drive up; the first access to it starts the Pi daemon.
+  descriptors to DEVS:DOSDrivers/. The A314Mount drawer, and a drawer the
+  installer makes for the GUI, get your Workbench's own drawer icon. After
+  that, "Mount PD0:" (or a reboot) brings a drive up; the first access to
+  it starts the Pi daemon.
 
 @endnode
 

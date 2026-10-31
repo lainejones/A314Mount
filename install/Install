@@ -12,7 +12,8 @@
 ; It copies the GadTools GUI + its icon to a drawer (so you can double-click
 ; it from Workbench), the CLI to C: (so you can type 'A314Mount' in a Shell),
 ; and -- if the a314 disk driver is present -- installs the PD0:..PD3: drive
-; descriptors that A314Mount drives.
+; descriptors that A314Mount drives. A drawer it makes, and the A314Mount
+; drawer itself, get your Workbench's own drawer icon.
 ;
 ; --- needs AmigaOS 3.0+ (exec.library V39) ---
 Version >NIL: exec.library 39
@@ -26,6 +27,10 @@ Echo "Installing A314Mount ..."
 ; --- GUI + icon -> destination drawer (double-clickable) ---
 If NOT EXISTS "{dest$SYS:Utilities}"
   MakeDir "{dest$SYS:Utilities}"
+  ; a drawer we make gets this Workbench's own drawer icon
+  If EXISTS ENV:Sys/def_drawer.info
+    Copy >NIL: ENV:Sys/def_drawer.info TO "{dest$SYS:Utilities}.info"
+  EndIf
 EndIf
 Copy >NIL: A314MountGUI      TO "{dest$SYS:Utilities}/" CLONE
 Copy >NIL: A314MountGUI.info TO "{dest$SYS:Utilities}/" CLONE
@@ -57,5 +62,15 @@ If EXISTS DEVS:a314disk.device
 Else
   Echo "  NOTE: DEVS:a314disk.device not found -- A314Mount needs the a314"
   Echo "        disk driver installed to get the PD0:..PD3: drives."
+EndIf
+;
+; --- the package drawer came with a plain drawer icon so it shows when
+; unpacked; from now on it has this Workbench's own. The CD command names
+; this drawer (the script runs in it); at a disk root there is no
+; "disk:.info", so a root is skipped.
+If EXISTS ENV:Sys/def_drawer.info
+  If EXISTS "`CD`.info"
+    Copy >NIL: ENV:Sys/def_drawer.info TO "`CD`.info"
+  EndIf
 EndIf
 Echo "Done."

@@ -118,7 +118,7 @@ and troubleshooting, all cross-linked. This README mirrors the same material.
 
 The `.info` icons were generated with the author's own icon tools (not part of
 this repo) and are committed ready-made in `install/`: the floppy GUI icon, the
-green install arrow, the package drawer, and the guide's document icon.
+green install arrow, the plain package drawer, and the guide's document icon.
 
 ## Install
 
@@ -142,7 +142,9 @@ copies). Then either:
 The installer drops **`A314MountGUI` + its icon** into the chosen drawer so you
 can double-click it from Workbench, copies the **`A314Mount`** CLI to `C:`, and
 — if `DEVS:a314disk.device` is present — installs the `PD0:`–`PD3:` drive
-descriptors to `DEVS:DOSDrivers/`. It stops without installing anything on
+descriptors to `DEVS:DOSDrivers/`. The `A314Mount` drawer arrives with a plain
+drawer icon; the installer gives it (and a drawer it makes for the GUI) your
+Workbench's own drawer icon. It stops without installing anything on
 an OS older than 3.0. After that, `Mount PD0:` (or a reboot) brings
 the drive up; the first access to it starts the Pi daemon.
 
